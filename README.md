@@ -23,7 +23,7 @@ A minimal authentication app with Svelte frontend and FastAPI backend supporting
 ### 2. Backend Setup
 ```bash
 cd auth-backend
-pip install -r requirements.txt
+uv sync
 
 # Update .env file with your OAuth credentials
 GITHUB_CLIENT_ID=your_github_client_id
@@ -34,7 +34,7 @@ JWT_SECRET=your_jwt_secret_key
 FRONTEND_URL=http://localhost:5173
 
 # Run backend
-python main.py
+uv run main.py
 ```
 
 ### 3. Frontend Setup
