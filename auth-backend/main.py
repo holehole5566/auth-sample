@@ -6,6 +6,8 @@ from jose import JWTError, jwt
 from datetime import datetime, timedelta
 import httpx
 import os
+import hashlib
+import base64
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -49,12 +51,51 @@ def create_tokens(user_data: dict):
 
 class GitHubAuthRequest(BaseModel):
     code: str
+    state: str = None
 
 class RefreshTokenRequest(BaseModel):
     refresh_token: str
 
 class GoogleAuthRequest(BaseModel):
     code: str
+    code_verifier: str = None
+    state: str = None
+
+def verify_pkce(code_verifier: str, code_challenge: str) -> bool:
+    """Verify PKCE code challenge"""
+    if not code_verifier or not code_challenge:
+        return True  # Skip verification if not provided
+    
+    # Generate challenge from verifier
+    digest = hashlib.sha256(code_verifier.encode()).digest()
+    generated_challenge = base64.urlsafe_b64encode(digest).decode().rstrip('=')
+    
+    return generated_challenge == code_challenge
+
+async def verify_google_id_token(id_token: str, http_client, access_token: str = None):
+    """Verify Google ID token with proper validation"""
+    try:
+        # Get Google's public keys
+        jwks_response = await http_client.get("https://www.googleapis.com/oauth2/v3/certs")
+        if jwks_response.status_code != 200:
+            raise HTTPException(500, "Failed to get Google keys")
+        
+        jwks = jwks_response.json()
+        
+        # Verify token with proper at_hash validation
+        user_data = jwt.decode(
+            id_token,
+            jwks,
+            algorithms=["RS256"],
+            audience=GOOGLE_CLIENT_ID,
+            issuer="https://accounts.google.com",
+            access_token=access_token  # Provide access token for at_hash validation
+        )
+        
+        return user_data
+        
+    except JWTError as e:
+        raise HTTPException(400, f"Invalid ID token: {str(e)}")
 
 async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)):
     try:
@@ -138,57 +179,75 @@ async def refresh_token(request: RefreshTokenRequest):
 
 @app.post("/auth/google")
 async def google_auth(request: GoogleAuthRequest):
-    async with httpx.AsyncClient() as client:
-        # Exchange code for access token
-        token_response = await client.post(
-            "https://oauth2.googleapis.com/token",
-            data={
+    try:
+        print(f"Google auth request: code={request.code[:10]}..., verifier={request.code_verifier[:10] if request.code_verifier else None}...")
+        async with httpx.AsyncClient() as client:
+            # Prepare token exchange data
+            token_data = {
                 "client_id": GOOGLE_CLIENT_ID,
                 "client_secret": GOOGLE_CLIENT_SECRET,
                 "code": request.code,
                 "grant_type": "authorization_code",
                 "redirect_uri": "http://localhost:5173/auth/google/callback"
             }
-        )
+            
+            # Add PKCE verifier if provided
+            if request.code_verifier:
+                token_data["code_verifier"] = request.code_verifier
+            
+            # Exchange code for tokens
+            token_response = await client.post(
+                "https://oauth2.googleapis.com/token",
+                data=token_data
+            )
         
-        if token_response.status_code != 200:
-            raise HTTPException(status_code=400, detail="Failed to get access token")
-        
-        token_data = token_response.json()
-        google_token = token_data.get("access_token")
-        
-        # Get user info
-        user_response = await client.get(
-            "https://www.googleapis.com/oauth2/v2/userinfo",
-            headers={"Authorization": f"Bearer {google_token}"}
-        )
-        
-        if user_response.status_code != 200:
-            raise HTTPException(status_code=400, detail="Failed to get user info")
-        
-        user_data = user_response.json()
-        
-        # Transform Google user data to match our format
-        transformed_user = {
-            "id": user_data["id"],
-            "login": user_data.get("email", "").split("@")[0],
-            "name": user_data.get("name"),
-            "email": user_data.get("email"),
-            "avatar_url": user_data.get("picture")
-        }
-        
-        tokens = create_tokens(transformed_user)
-        
-        return {
-            "user": {
-                "id": transformed_user["id"], 
-                "username": transformed_user["login"],
-                "name": transformed_user.get("name"),
-                "email": transformed_user.get("email"),
-                "avatar": transformed_user.get("avatar_url")
-            },
-            **tokens
-        }
+            if token_response.status_code != 200:
+                print(f"Google token response error: {token_response.status_code} - {token_response.text}")
+                raise HTTPException(status_code=400, detail="Failed to get access token")
+            
+            token_data = token_response.json()
+            print(f"Token response: {token_data}")
+            id_token = token_data.get("id_token")
+            
+            if not id_token:
+                raise HTTPException(status_code=400, detail="No ID token received")
+            
+            # Verify ID token
+            try:
+                google_access_token = token_data.get("access_token")
+                user_data = await verify_google_id_token(id_token, client, google_access_token)
+                print(f"Verified user data: {user_data}")
+                
+            except Exception as e:
+                print(f"JWT verification error: {e}")
+                raise HTTPException(status_code=400, detail=f"Failed to verify ID token: {str(e)}")
+            
+            # Transform to expected format
+            user_data = {
+                "id": user_data["sub"],
+                "login": user_data.get("email", "").split("@")[0],
+                "name": user_data.get("name"),
+                "email": user_data.get("email"),
+                "avatar_url": user_data.get("picture")
+            }
+            
+            tokens = create_tokens(user_data)
+            
+            return {
+                "user": {
+                    "id": user_data["id"], 
+                    "username": user_data["login"],
+                    "name": user_data.get("name"),
+                    "email": user_data.get("email"),
+                    "avatar": user_data.get("avatar_url")
+                },
+                **tokens
+            }
+    except Exception as e:
+        print(f"Google auth error: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Internal error: {str(e)}")
 
 @app.get("/auth/me")
 async def get_me(current_user = Depends(get_current_user)):

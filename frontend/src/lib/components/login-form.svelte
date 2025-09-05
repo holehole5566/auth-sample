@@ -2,19 +2,16 @@
 	import { env } from '$env/dynamic/public';
 	import { Button } from "$lib/components/ui/button/index.js";
 	import * as Card from "$lib/components/ui/card/index.js";
+	import { generateOAuthURL } from '$lib/auth';
 
-	function loginWithGitHub() {
-		const clientId = import.meta.env.VITE_GITHUB_CLIENT_ID || 'your_github_client_id';
-		const redirectUri = `${window.location.origin}/auth/github/callback`;
-		const githubUrl = `https://github.com/login/oauth/authorize?client_id=${clientId}&redirect_uri=${redirectUri}&scope=user:email`;
-		window.location.href = githubUrl;
+	async function loginWithGitHub() {
+		const url = await generateOAuthURL('github');
+		window.location.href = url;
 	}
 
-	function loginWithGoogle() {
-		const clientId = import.meta.env.VITE_GOOGLE_CLIENT_ID || 'your_google_client_id';
-		const redirectUri = `${window.location.origin}/auth/google/callback`;
-		const googleUrl = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${clientId}&redirect_uri=${redirectUri}&response_type=code&scope=openid email profile`;
-		window.location.href = googleUrl;
+	async function loginWithGoogle() {
+		const url = await generateOAuthURL('google');
+		window.location.href = url;
 	}
 </script>
 

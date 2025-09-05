@@ -6,8 +6,16 @@
 
 	onMount(async () => {
 		const code = $page.url.searchParams.get('code');
+		const state = $page.url.searchParams.get('state');
+		
 		if (code) {
 			try {
+				// Verify state parameter (CSRF protection)
+				const storedState = sessionStorage.getItem('oauth_state');
+				if (state !== storedState) {
+					throw new Error('Invalid state parameter - possible CSRF attack');
+				}
+				
 				await exchangeCodeForTokens(code, 'google');
 				goto('/dashboard');
 			} catch (error) {
