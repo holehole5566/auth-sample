@@ -50,7 +50,7 @@ const state = urlParams.get('state');
 // Verify state matches (CSRF protection)
 const storedState = sessionStorage.getItem('oauth_state');
 if (state !== storedState) {
-    throw new Error('Invalid state parameter');
+    throw new Error('Invalid state parameter - possible CSRF attack');
 }
 
 // Exchange code for tokens
@@ -101,14 +101,17 @@ token_response = await client.post(
 jwks_response = await client.get("https://www.googleapis.com/oauth2/v3/certs")
 jwks = jwks_response.json()
 
-# Verify ID token
+# Extract access token for at_hash validation
+google_access_token = token_data.get("access_token")
+
+# Verify ID token with full security validation
 user_data = jwt.decode(
     id_token,
     jwks,
     algorithms=["RS256"],
     audience=GOOGLE_CLIENT_ID,
     issuer="https://accounts.google.com",
-    options={"verify_at_hash": False}
+    access_token=google_access_token  # Enables at_hash validation
 )
 
 # Verified user data contains:
@@ -173,6 +176,7 @@ goto('/dashboard');
 - **Audience**: Ensure token is for your application (client_id)
 - **Issuer**: Confirm token came from Google
 - **Expiration**: Check token hasn't expired
+- **at_hash**: Verify ID token and access token were issued together (prevents token substitution attacks)
 
 ## Key Differences from Basic OAuth
 
